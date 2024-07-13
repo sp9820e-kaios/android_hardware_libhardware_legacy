@@ -157,6 +157,7 @@ protected:
             STRATEGY_SONIFICATION_RESPECTFUL,
             STRATEGY_DTMF,
             STRATEGY_ENFORCED_AUDIBLE,
+            STRATEGY_FM, //modified for FM
             NUM_STRATEGIES
         };
 
@@ -565,6 +566,14 @@ protected:
         bool mHasA2dp; // true on platforms with support for bluetooth A2DP
         bool mHasUsb; // true on platforms with support for USB audio
         bool mHasRemoteSubmix; // true on platforms with support for remote presentation of a submix
+        volatile bool   mDone;
+        pthread_t mThread;
+        bool mHasStartupSound;
+        status_t startReadingThread();
+        void stopReadingThread();
+        static void *ThreadWrapper(void *me);
+        void threadFunc();
+        bool mFmOffGoing;
         audio_devices_t mAttachedOutputDevices; // output devices always available on the platform
         audio_devices_t mDefaultOutputDevice; // output device selected by default at boot time
                                               // (must be in mAttachedOutputDevices)

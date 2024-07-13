@@ -150,6 +150,16 @@ int wifi_change_fw_path(const char *fwpath);
 #define WIFI_ENTROPY_FILE	"/data/misc/wifi/entropy.bin"
 int ensure_entropy_file_exists();
 
+//NOTE: Add for SoftAp Advance Feature -->
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+int wifi_connect_to_hostapd(const char *ifname);
+void wifi_close_hostapd_connection(const char *ifname);
+void wifi_stop_connect_to_hostapd(const char *ifname);
+int wifi_hostapd_command(const char *cmd, char *reply, size_t *reply_len);
+int wifi_hostapd_wait_for_event(char *buf, size_t buflen);
+#endif
+//<-- Add for SoftAp Advance Feature
+
 #if __cplusplus
 };  // extern "C"
 #endif

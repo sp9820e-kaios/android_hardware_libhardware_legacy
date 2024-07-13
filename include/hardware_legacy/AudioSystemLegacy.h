@@ -81,6 +81,9 @@ public:
         ENFORCED_AUDIBLE = 7, // Sounds that cannot be muted by user and must be routed to speaker
         DTMF             = 8,
         TTS              = 9,
+        // modified for FM start
+        FM               = 10,
+        // modified for FM end
         NUM_STREAM_TYPES
     };
 
@@ -243,15 +246,25 @@ public:
         DEVICE_OUT_AUX_DIGITAL = 0x400,
         DEVICE_OUT_ANLG_DOCK_HEADSET = 0x800,
         DEVICE_OUT_DGTL_DOCK_HEADSET = 0x1000,
+        // modified for FM start
+        DEVICE_OUT_FM_HEADSET = 0x1000000,
+        DEVICE_OUT_FM_SPEAKER = 0x2000000,
+        // modified for FM end
         DEVICE_OUT_DEFAULT = 0x8000,
         DEVICE_OUT_ALL = (DEVICE_OUT_EARPIECE | DEVICE_OUT_SPEAKER | DEVICE_OUT_WIRED_HEADSET |
                 DEVICE_OUT_WIRED_HEADPHONE | DEVICE_OUT_BLUETOOTH_SCO | DEVICE_OUT_BLUETOOTH_SCO_HEADSET |
                 DEVICE_OUT_BLUETOOTH_SCO_CARKIT | DEVICE_OUT_BLUETOOTH_A2DP | DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES |
                 DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER | DEVICE_OUT_AUX_DIGITAL |
                 DEVICE_OUT_ANLG_DOCK_HEADSET | DEVICE_OUT_DGTL_DOCK_HEADSET |
+                // modified for FM start
+                DEVICE_OUT_FM_HEADSET | DEVICE_OUT_FM_SPEAKER |
+                // modified for FM end
                 DEVICE_OUT_DEFAULT),
         DEVICE_OUT_ALL_A2DP = (DEVICE_OUT_BLUETOOTH_A2DP | DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES |
                 DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER),
+        // modified for FM start
+        DEVICE_OUT_ALL_FM = (DEVICE_OUT_FM_HEADSET | DEVICE_OUT_FM_SPEAKER),
+        // modified for FM end
 
         // input devices
         DEVICE_IN_COMMUNICATION = 0x10000,

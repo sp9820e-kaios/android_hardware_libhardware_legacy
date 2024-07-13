@@ -27,9 +27,7 @@
 #include <cutils/sockets.h>
 
 #include "hardware_legacy/wifi.h"
-#ifdef LIBWPA_CLIENT_EXISTS
 #include "libwpa_client/wpa_ctrl.h"
-#endif
 
 #define LOG_TAG "WifiHW"
 #include "cutils/log.h"
@@ -37,25 +35,25 @@
 #include "cutils/misc.h"
 #include "cutils/properties.h"
 #include "private/android_filesystem_config.h"
-
+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
 #define _REALLY_INCLUDE_SYS__SYSTEM_PROPERTIES_H_
 #include <sys/_system_properties.h>
-
-//NOTE: Add for WCND RESET Feature -->
-
-//To control if connect to WCND before loading wifi driver and after unloading wifi driver
-#define CONFIG_WCND 1
+#endif
 
 #define WCND_SOCKET_NAME	"wcnd"
 #define WCND_CMD_STR_START_CP2  "wcn WIFI-OPEN"
 #define WCND_CMD_STR_STOP_CP2  "wcn WIFI-CLOSE"
 #define WCND_RESP_STR_WIFI_OK   "BTWIFI-CMD OK"
 
-#ifdef CONFIG_WCND
 static int wcnd_socket = -1;
 static int supplicant_is_killed_for_cp2_assert = 0;
-#endif
-//<-- Add for WCND RESET Feature
+
+
+static struct wpa_ctrl *ctrl_conn;
+static struct wpa_ctrl *monitor_conn;
+
+/* socket pair used to exit from a blocking read */
+static int exit_sockets[2];
 
 extern int do_dhcp();
 extern int ifc_init();
@@ -65,28 +63,6 @@ extern void get_dhcp_info();
 extern int init_module(void *, unsigned long, const char *);
 extern int delete_module(const char *, unsigned int);
 void wifi_close_sockets();
-
-#ifndef LIBWPA_CLIENT_EXISTS
-#define WPA_EVENT_TERMINATING "CTRL-EVENT-TERMINATING "
-struct wpa_ctrl {};
-void wpa_ctrl_cleanup(void) {}
-struct wpa_ctrl *wpa_ctrl_open(const char *ctrl_path) { return NULL; }
-void wpa_ctrl_close(struct wpa_ctrl *ctrl) {}
-int wpa_ctrl_request(struct wpa_ctrl *ctrl, const char *cmd, size_t cmd_len,
-	char *reply, size_t *reply_len, void (*msg_cb)(char *msg, size_t len))
-	{ return 0; }
-int wpa_ctrl_attach(struct wpa_ctrl *ctrl) { return 0; }
-int wpa_ctrl_detach(struct wpa_ctrl *ctrl) { return 0; }
-int wpa_ctrl_recv(struct wpa_ctrl *ctrl, char *reply, size_t *reply_len)
-	{ return 0; }
-int wpa_ctrl_get_fd(struct wpa_ctrl *ctrl) { return 0; }
-#endif
-
-static struct wpa_ctrl *ctrl_conn;
-static struct wpa_ctrl *monitor_conn;
-
-/* socket pair used to exit from a blocking read */
-static int exit_sockets[2];
 
 static char primary_iface[PROPERTY_VALUE_MAX];
 // TODO: use new ANDROID_SOCKET mechanism, once support for multiple
@@ -151,8 +127,6 @@ static char supplicant_name[PROPERTY_VALUE_MAX];
 static char supplicant_prop_name[PROPERTY_KEY_MAX];
 
 
-//NOTE: Add for WCND RESET Feature -->
-#ifdef CONFIG_WCND
 static int connect_wcnd(void)
 {
     int client_fd = -1;
@@ -192,13 +166,13 @@ static int start_cp2(void)
 
     ALOGD("%s: send %s to %s\n",__func__, WCND_CMD_STR_START_CP2, WCND_SOCKET_NAME);
 
-    memset(buffer, 0, sizeof(buffer));
+    memset(buffer, 0, 128);
 
     n = strlen(WCND_CMD_STR_START_CP2) +1;
 
     TEMP_FAILURE_RETRY(write(wcnd_socket, WCND_CMD_STR_START_CP2, n));
 
-    memset(buffer, 0, sizeof(buffer));
+    memset(buffer, 0, 128);
 
     ALOGD("%s: waiting for server %s\n",__func__, WCND_SOCKET_NAME);
     n = read(wcnd_socket, buffer, sizeof(buffer)-1);
@@ -218,13 +192,13 @@ static int stop_cp2(void)
 
     ALOGD("%s: send %s to %s\n",__func__, WCND_CMD_STR_STOP_CP2, WCND_SOCKET_NAME);
 
-    memset(buffer, 0, sizeof(buffer));
+    memset(buffer, 0, 128);
 
-    n = strlen(WCND_CMD_STR_STOP_CP2) +1;
+    n = strlen(WCND_CMD_STR_START_CP2) +1;
 
     TEMP_FAILURE_RETRY(write(wcnd_socket, WCND_CMD_STR_STOP_CP2, n));
 
-    memset(buffer, 0, sizeof(buffer));
+    memset(buffer, 0, 128);
 
     ALOGD("%s: waiting for server %s\n",__func__, WCND_SOCKET_NAME);
     n = read(wcnd_socket, buffer, sizeof(buffer)-1);
@@ -236,9 +210,6 @@ static int stop_cp2(void)
     return ret;
 
 }
-#endif
-//<-- Add for WCND RESET Feature
-
 
 static int insmod(const char *filename, const char *args)
 {
@@ -251,7 +222,6 @@ static int insmod(const char *filename, const char *args)
         return -1;
 
     ret = init_module(module, size, args);
-
     free(module);
 
     return ret;
@@ -297,30 +267,6 @@ int do_dhcp_request(int *ipaddr, int *gateway, int *mask,
 const char *get_dhcp_error_string() {
     return dhcp_lasterror();
 }
-
-#ifdef WIFI_DRIVER_STATE_CTRL_PARAM
-int wifi_change_driver_state(const char *state)
-{
-    int len;
-    int fd;
-    int ret = 0;
-
-    if (!state)
-        return -1;
-    fd = TEMP_FAILURE_RETRY(open(WIFI_DRIVER_STATE_CTRL_PARAM, O_WRONLY));
-    if (fd < 0) {
-        ALOGE("Failed to open driver state control param (%s)", strerror(errno));
-        return -1;
-    }
-    len = strlen(state) + 1;
-    if (TEMP_FAILURE_RETRY(write(fd, state, len)) != len) {
-        ALOGE("Failed to write driver state control param (%s)", strerror(errno));
-        ret = -1;
-    }
-    close(fd);
-    return ret;
-}
-#endif
 
 int is_wifi_driver_loaded() {
     char driver_status[PROPERTY_VALUE_MAX];
@@ -369,8 +315,6 @@ int wifi_load_driver()
         return 0;
     }
 
-//NOTE: Add for WCND RESET Feature -->
-#ifdef CONFIG_WCND
     //start cp2 first
     if(wcnd_socket < 0) {
         wcnd_socket = connect_wcnd();
@@ -380,8 +324,6 @@ int wifi_load_driver()
         ALOGE("start CP2 FAIL");
         //return -1;
     }
-#endif
-//<-- Add for WCND RESET Feature
 
     if (insmod(DRIVER_MODULE_PATH, DRIVER_MODULE_ARG) < 0)
         return -1;
@@ -398,7 +340,7 @@ int wifi_load_driver()
         if (property_get(DRIVER_PROP_NAME, driver_status, NULL)) {
             if (strcmp(driver_status, "ok") == 0)
                 return 0;
-            else if (strcmp(driver_status, "failed") == 0) {
+            else if (strcmp(DRIVER_PROP_NAME, "failed") == 0) {
                 wifi_unload_driver();
                 return -1;
             }
@@ -409,14 +351,6 @@ int wifi_load_driver()
     wifi_unload_driver();
     return -1;
 #else
-#ifdef WIFI_DRIVER_STATE_CTRL_PARAM
-    if (is_wifi_driver_loaded()) {
-        return 0;
-    }
-
-    if (wifi_change_driver_state(WIFI_DRIVER_STATE_ON) < 0)
-        return -1;
-#endif
     property_set(DRIVER_PROP_NAME, "ok");
     return 0;
 #endif
@@ -426,13 +360,8 @@ int wifi_unload_driver()
 {
     usleep(200000); /* allow to finish interface down */
 #ifdef WIFI_DRIVER_MODULE_PATH
-
-//NOTE: Add for WCND RESET Feature -->
-#ifdef CONFIG_WCND
     int ret = 0;
-#endif
-
-#ifndef CONFIG_WCND
+#if 0
     if (rmmod(DRIVER_MODULE_NAME) == 0) {
         int count = 20; /* wait at most 10 seconds for completion */
         while (count-- > 0) {
@@ -447,7 +376,7 @@ int wifi_unload_driver()
         return -1;
     } else
         return -1;
-#else
+#endif
     if (rmmod(DRIVER_MODULE_NAME) == 0) {
         int count = 20; /* wait at most 10 seconds for completion */
         while (count-- > 0) {
@@ -474,16 +403,8 @@ int wifi_unload_driver()
     }
 
     return ret;
-#endif
-//<-- Add for WCND RESET Feature
 
 #else
-#ifdef WIFI_DRIVER_STATE_CTRL_PARAM
-    if (is_wifi_driver_loaded()) {
-        if (wifi_change_driver_state(WIFI_DRIVER_STATE_OFF) < 0)
-            return -1;
-    }
-#endif
     property_set(DRIVER_PROP_NAME, "unloaded");
     return 0;
 #endif
@@ -531,6 +452,84 @@ int ensure_entropy_file_exists()
         return -1;
     }
     return 0;
+}
+
+int update_ctrl_interface(const char *config_file) {
+
+    int srcfd, destfd;
+    int nread;
+    char ifc[PROPERTY_VALUE_MAX];
+    char *pbuf;
+    char *sptr;
+    struct stat sb;
+    int ret;
+
+    if (stat(config_file, &sb) != 0)
+        return -1;
+
+    pbuf = malloc(sb.st_size + PROPERTY_VALUE_MAX);
+    if (!pbuf)
+        return 0;
+    srcfd = TEMP_FAILURE_RETRY(open(config_file, O_RDONLY));
+    if (srcfd < 0) {
+        ALOGE("Cannot open \"%s\": %s", config_file, strerror(errno));
+        free(pbuf);
+        return 0;
+    }
+    nread = TEMP_FAILURE_RETRY(read(srcfd, pbuf, sb.st_size));
+    close(srcfd);
+    if (nread < 0) {
+        ALOGE("Cannot read \"%s\": %s", config_file, strerror(errno));
+        free(pbuf);
+        return 0;
+    }
+
+    if (!strcmp(config_file, SUPP_CONFIG_FILE)) {
+        property_get("wifi.interface", ifc, WIFI_TEST_INTERFACE);
+    } else {
+        strcpy(ifc, CONTROL_IFACE_PATH);
+    }
+    /* Assume file is invalid to begin with */
+    ret = -1;
+    /*
+     * if there is a "ctrl_interface=<value>" entry, re-write it ONLY if it is
+     * NOT a directory.  The non-directory value option is an Android add-on
+     * that allows the control interface to be exchanged through an environment
+     * variable (initialized by the "init" program when it starts a service
+     * with a "socket" option).
+     *
+     * The <value> is deemed to be a directory if the "DIR=" form is used or
+     * the value begins with "/".
+     */
+    if ((sptr = strstr(pbuf, "ctrl_interface="))) {
+        ret = 0;
+        if ((!strstr(pbuf, "ctrl_interface=DIR=")) &&
+                (!strstr(pbuf, "ctrl_interface=/"))) {
+            char *iptr = sptr + strlen("ctrl_interface=");
+            int ilen = 0;
+            int mlen = strlen(ifc);
+            int nwrite;
+            if (strncmp(ifc, iptr, mlen) != 0) {
+                ALOGE("ctrl_interface != %s", ifc);
+                while (((ilen + (iptr - pbuf)) < nread) && (iptr[ilen] != '\n'))
+                    ilen++;
+                mlen = ((ilen >= mlen) ? ilen : mlen) + 1;
+                memmove(iptr + mlen, iptr + ilen + 1, nread - (iptr + ilen + 1 - pbuf));
+                memset(iptr, '\n', mlen);
+                memcpy(iptr, ifc, strlen(ifc));
+                destfd = TEMP_FAILURE_RETRY(open(config_file, O_RDWR, 0660));
+                if (destfd < 0) {
+                    ALOGE("Cannot update \"%s\": %s", config_file, strerror(errno));
+                    free(pbuf);
+                    return -1;
+                }
+                TEMP_FAILURE_RETRY(write(destfd, pbuf, nread + mlen - ilen -1));
+                close(destfd);
+            }
+        }
+    }
+    free(pbuf);
+    return ret;
 }
 
 int ensure_config_file_exists(const char *config_file)
@@ -602,16 +601,13 @@ int wifi_start_supplicant(int p2p_supported)
 {
     char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
     int count = 200; /* wait at most 20 seconds for completion */
+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
     const prop_info *pi;
     unsigned serial = 0, i;
-
-//NOTE: Add for WCND RESET Feature -->
-#ifdef CONFIG_WCND
-    supplicant_is_killed_for_cp2_assert = 0;
 #endif
-//<-- Add for WCND RESET Feature
 
-
+    supplicant_is_killed_for_cp2_assert = 0;
+ ALOGE(" jun wifi_start_supplicant %d",p2p_supported);
     if (p2p_supported) {
         strcpy(supplicant_name, P2P_SUPPLICANT_NAME);
         strcpy(supplicant_prop_name, P2P_PROP_NAME);
@@ -628,27 +624,29 @@ int wifi_start_supplicant(int p2p_supported)
     }
 
     /* Check whether already running */
-    if (property_get(supplicant_prop_name, supp_status, NULL)
+    if (property_get(supplicant_name, supp_status, NULL)
             && strcmp(supp_status, "running") == 0) {
         return 0;
     }
-
+	ALOGE(" jun wifi_start_supplicant 2");
     /* Before starting the daemon, make sure its config file exists */
     if (ensure_config_file_exists(SUPP_CONFIG_FILE) < 0) {
         ALOGE("Wi-Fi will not be enabled");
         return -1;
     }
-
+	ALOGE(" jun wifi_start_supplicant 3");
     if (ensure_entropy_file_exists() < 0) {
         ALOGE("Wi-Fi entropy file was not created");
     }
-
+	ALOGE(" jun wifi_start_supplicant 4");
     /* Clear out any stale socket files that might be left over. */
     wpa_ctrl_cleanup();
 
     /* Reset sockets used for exiting from hung state */
     exit_sockets[0] = exit_sockets[1] = -1;
 
+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
+	ALOGE(" jun wifi_start_supplicant 5");
     /*
      * Get a reference to the status property, so we can distinguish
      * the case where it goes stopped => running => stopped (i.e.,
@@ -660,30 +658,47 @@ int wifi_start_supplicant(int p2p_supported)
     if (pi != NULL) {
         serial = __system_property_serial(pi);
     }
+#endif
     property_get("wifi.interface", primary_iface, WIFI_TEST_INTERFACE);
-
+ALOGE(" jun wifi_start_supplicant supplicant name:%s",supplicant_name);
     property_set("ctl.start", supplicant_name);
     sched_yield();
 
     while (count-- > 0) {
+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
         if (pi == NULL) {
             pi = __system_property_find(supplicant_prop_name);
         }
         if (pi != NULL) {
-            /*
-             * property serial updated means that init process is scheduled
-             * after we sched_yield, further property status checking is based on this */
-            if (__system_property_serial(pi) != serial) {
-                __system_property_read(pi, NULL, supp_status);
-                if (strcmp(supp_status, "running") == 0) {
+            __system_property_read(pi, NULL, supp_status);
+            if (strcmp(supp_status, "running") == 0) {
+		ALOGE(" jun wifi_start_supplicant start successful 1");
+                return 0;
+            } else if (__system_property_serial(pi) != serial &&
+                    strcmp(supp_status, "stopped") == 0) {
+
+                //to check the status again, to avoid schedule isuuse such as Bug#304317
+                char supp_status2[PROPERTY_VALUE_MAX] = {'\0'};
+                __system_property_read(pi, NULL, supp_status2);
+                if (strcmp(supp_status2, "running") == 0) {
+		   ALOGE(" jun wifi_start_supplicant start successful 2");
                     return 0;
-                } else if (strcmp(supp_status, "stopped") == 0) {
-                    return -1;
                 }
+		ALOGE(" jun wifi_start_supplicant start fail 1");
+                return -1;
             }
         }
+#else
+        if (property_get(supplicant_prop_name, supp_status, NULL)) {
+            if (strcmp(supp_status, "running") == 0){
+		ALOGE(" jun wifi_start_supplicant start successful 3");
+		return 0;
+            }
+        }
+#endif
         usleep(100000);
     }
+   ALOGE(" jun wifi_start_supplicant start fail 2");
     return -1;
 }
 
@@ -692,15 +707,12 @@ int wifi_stop_supplicant(int p2p_supported)
     char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
     int count = 50; /* wait at most 5 seconds for completion */
 
-//NOTE: Add for WCND RESET Feature -->
-#ifdef CONFIG_WCND
     //clear
     supplicant_is_killed_for_cp2_assert = 0;
-#endif
-//<-- Add for WCND RESET Feature
 
-
+ ALOGE("wifi_stop_supplicant p2p_support %d",p2p_supported);	
     if (p2p_supported) {
+	ALOGE("wifi_stop_supplicant supp name %s",P2P_SUPPLICANT_NAME);
         strcpy(supplicant_name, P2P_SUPPLICANT_NAME);
         strcpy(supplicant_prop_name, P2P_PROP_NAME);
     } else {
@@ -789,14 +801,10 @@ int wifi_send_command(const char *cmd, char *reply, size_t *reply_len)
         return -1;
     }
 
-//NOTE: Add for WCND RESET Feature -->
-#ifdef CONFIG_WCND
     if (supplicant_is_killed_for_cp2_assert) {
         ALOGD("Not connected to wpa_supplicant  for supplicant_is_killed_for_cp2_assert - \"%s\" command dropped.\n", cmd);
         return -1;
     }
-#endif
-//<-- Add for WCND RESET Feature
 
     ret = wpa_ctrl_request(ctrl_conn, cmd, strlen(cmd), reply, reply_len, NULL);
     if (ret == -2) {
@@ -813,18 +821,6 @@ int wifi_send_command(const char *cmd, char *reply, size_t *reply_len)
     return 0;
 }
 
-int wifi_supplicant_connection_active()
-{
-    char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
-
-    if (property_get(supplicant_prop_name, supp_status, NULL)) {
-        if (strcmp(supp_status, "stopped") == 0)
-            return -1;
-    }
-
-    return 0;
-}
-
 int wifi_ctrl_recv(char *reply, size_t *reply_len)
 {
     int res;
@@ -836,21 +832,11 @@ int wifi_ctrl_recv(char *reply, size_t *reply_len)
     rfds[0].events |= POLLIN;
     rfds[1].fd = exit_sockets[1];
     rfds[1].events |= POLLIN;
-    do {
-        res = TEMP_FAILURE_RETRY(poll(rfds, 2, 30000));
-        if (res < 0) {
-            ALOGE("Error poll = %d", res);
-            return res;
-        } else if (res == 0) {
-            /* timed out, check if supplicant is active
-             * or not ..
-             */
-            res = wifi_supplicant_connection_active();
-            if (res < 0)
-                return -2;
-        }
-    } while (res == 0);
-
+    res = TEMP_FAILURE_RETRY(poll(rfds, 2, -1));
+    if (res < 0) {
+        ALOGE("Error poll = %d", res);
+        return res;
+    }
     if (rfds[0].revents & POLLIN) {
         return wpa_ctrl_recv(monitor_conn, reply, reply_len);
     }
@@ -868,30 +854,26 @@ int wifi_wait_on_socket(char *buf, size_t buflen)
     char *match, *match2;
 
     if (monitor_conn == NULL) {
-        return snprintf(buf, buflen, "IFNAME=%s %s - connection closed",
-                        primary_iface, WPA_EVENT_TERMINATING);
+        return snprintf(buf, buflen, WPA_EVENT_TERMINATING " - connection closed");
     }
 
     result = wifi_ctrl_recv(buf, &nread);
 
     /* Terminate reception on exit socket */
     if (result == -2) {
-        return snprintf(buf, buflen, "IFNAME=%s %s - connection closed",
-                        primary_iface, WPA_EVENT_TERMINATING);
+        return snprintf(buf, buflen, WPA_EVENT_TERMINATING " - connection closed");
     }
 
     if (result < 0) {
         ALOGD("wifi_ctrl_recv failed: %s\n", strerror(errno));
-        return snprintf(buf, buflen, "IFNAME=%s %s - recv error",
-                        primary_iface, WPA_EVENT_TERMINATING);
+        return snprintf(buf, buflen, WPA_EVENT_TERMINATING " - recv error");
     }
     buf[nread] = '\0';
     /* Check for EOF on the socket */
     if (result == 0 && nread == 0) {
         /* Fabricate an event to pass up */
         ALOGD("Received EOF on supplicant socket\n");
-        return snprintf(buf, buflen, "IFNAME=%s %s - signal 0 received",
-                        primary_iface, WPA_EVENT_TERMINATING);
+        return snprintf(buf, buflen, WPA_EVENT_TERMINATING " - signal 0 received");
     }
     /*
      * Events strings are in the format
@@ -930,8 +912,6 @@ int wifi_wait_on_socket(char *buf, size_t buflen)
         ALOGW("supplicant generated event without interface and without message level - %s\n", buf);
     }
 
-//NOTE: Add for WCND RESET Feature -->
-#ifdef CONFIG_WCND
     if (strstr(buf, WPA_EVENT_TERMINATING)) {
         //check if CP2 is assert
         char cp2_status[PROPERTY_VALUE_MAX] = {'\0'};
@@ -942,8 +922,6 @@ int wifi_wait_on_socket(char *buf, size_t buflen)
             }
         }
     }
-#endif
-//<-- Add for WCND RESET Feature
 
     return nread;
 }
@@ -1032,7 +1010,6 @@ int wifi_change_fw_path(const char *fwpath)
     return ret;
 }
 
-//NOTE: Add for SoftAp Advance Feature -->
 #ifndef CONFIG_NO_HOSTAPD_ADVANCE
 static const char AP_IFACE_DIR[] = "/data/misc/wifi/hostapd";
 
@@ -1235,4 +1212,3 @@ int wifi_hostapd_command(const char *cmd, char *reply, size_t *reply_len)
     return 0;
 }
 #endif
-//<-- Add for SoftAp Advance Feature
